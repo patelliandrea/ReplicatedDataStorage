@@ -1,22 +1,8 @@
 package it.polimi.inginf.distsys.replication;
 
-import java.util.LinkedList;
-import java.util.Queue;
+import java.rmi.Remote;
 
-public class Replica {
-	private int value;
-	private Queue<Message> messageQueue;
-	
-	public Replica() {
-		this.messageQueue = new LinkedList<Message>();
-	}
-	
-	
-	public synchronized void setValue(int value) {
-		this.value = value;
-	}
-	
-	public synchronized int getValue() {
-		return this.value;
-	}
+public interface Replica extends Remote {
+	public int read(int id);
+	public void write(int id, int data);
 }
