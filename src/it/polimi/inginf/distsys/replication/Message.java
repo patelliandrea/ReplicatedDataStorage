@@ -8,7 +8,8 @@ public class Message implements Serializable {
     int id;
     UUID messageId;
 	MessageType type;
-	
+	int order;
+
 	public Message(MessageType type) {
         this();
 		this.type = type;
@@ -19,6 +20,12 @@ public class Message implements Serializable {
 		this.value = value;
         this.id = id;
 	}
+
+    public Message(MessageType type, int order, UUID messageId) {
+        this.type = type;
+        this.order = order;
+        this.messageId = messageId;
+    }
 	
 	public Message() {
         this.messageId = UUID.randomUUID();
@@ -48,9 +55,18 @@ public class Message implements Serializable {
 		this.type = type;
 	}
 
+    public void setOrder(int order) {
+        this.order = order;
+    }
+
+    public int getOrder() {
+        return this.order;
+    }
+
     public UUID getMessageId() {
         return this.messageId;
     }
+
     public String toString() {
         return String.format("id: %d, value: %d", this.id, this.value);
     }
