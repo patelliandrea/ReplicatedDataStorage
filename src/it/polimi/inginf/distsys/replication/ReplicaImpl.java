@@ -5,9 +5,9 @@ import java.net.*;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 
-public class ReplicaImpl /*extends UnicastRemoteObject implements Replica*/ {
+public class ReplicaImpl implements Replica /*extends UnicastRemoteObject implements Replica*/ {
 	private static final long serialVersionUID = -1196569555356780831L;
     private String name;
     private int multicastPort;
@@ -17,12 +17,13 @@ public class ReplicaImpl /*extends UnicastRemoteObject implements Replica*/ {
     private MulticastSocket multicastSocket;
     private DatagramSocket sequencerSocket;
     private Map<Integer, Integer> storage;
-    private Timer timeout;
+    private ScheduledExecutorService timeout;
+    private boolean isFirst;
     int last;
     boolean first;
     Message lastMessage;
 
-	protected ReplicaImpl(String name) throws /*RemoteException,*/ IOException {
+	protected ReplicaImpl(String name) /*throws RemoteException,*/ {
 		super();
         this.name = name;
         this.first = true;
@@ -32,15 +33,17 @@ public class ReplicaImpl /*extends UnicastRemoteObject implements Replica*/ {
 
         this.multicastPort = 5000;
         this.group = "225.4.5.6";
-        this.multicastSocket = new MulticastSocket(multicastPort);
-        multicastSocket.joinGroup(InetAddress.getByName(group));
 
         this.sequencerPort = 5003;
         this.sequencerAddress = "127.0.0.1";
-        this.sequencerSocket = new DatagramSocket();
-
-        this.listen();
 	}
+
+    public void start() throws IOException {
+        this.multicastSocket = new MulticastSocket(multicastPort);
+        multicastSocket.joinGroup(InetAddress.getByName(group));
+        this.sequencerSocket = new DatagramSocket();
+        this.listen();
+    }
 
 	//@Override
 	public int read(int id) {
@@ -62,27 +65,36 @@ public class ReplicaImpl /*extends UnicastRemoteObject implements Replica*/ {
         }
 	}
 
-    private void TOMulticast(Message message) throws IOException {
+    private void TOMulticast(final Message message) throws IOException {
         boolean isNack = message.getType() == MessageType.NACK;
         byte[] byteMessage = messageToByte(message);
-        DatagramPacket packet = new DatagramPacket(byteMessage, byteMessage.length, InetAddress.getByName(sequencerAddress), this.sequencerPort);
-        sequencerSocket.send(packet);
+        final DatagramPacket packet = new DatagramPacket(byteMessage, byteMessage.length, InetAddress.getByName(sequencerAddress), this.sequencerPort);
+        isFirst = true;
         if(!isNack) {
             System.out.println("[REPLICA " + name + "] Sending message UUID: " + message.getMessageId().toString());
-            this.timeout = new Timer();
-//            timeout.schedule(new TimerTask() {
-//                @Override
-//                public void run() {
-//                    try {
-//                        System.out.println("[REPLICA " + name + "] Timed out for message UUID: " + lastMessage.getMessageId());
-//                        TOMulticast(lastMessage);
-//                    } catch (Exception e) {
-//                        e.printStackTrace();
-//                    }
-//                }
-//            }, 1000, 1000);
+            Runnable timeoutTask = new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        sequencerSocket.send(packet);
+                        System.out.println("[REPLICA " + name + "] Sending message UUID: " + message.getMessageId().toString());
+                        if(!isFirst)
+                            System.out.println("[REPLICA " + name + "] Timed out for message UUID: " + lastMessage.getMessageId());
+                        isFirst = false;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+            };
+
+            timeout = Executors.newSingleThreadScheduledExecutor();
+            timeout.scheduleWithFixedDelay(timeoutTask, 0, 1, TimeUnit.SECONDS);
+
         } else {
             System.err.println("[REPLICA " + name + "] Sending NACK, last order: " + Integer.toString(this.last));
+//            byte[] byteMessage = messageToByte(message);
+//            DatagramPacket packet = new DatagramPacket(byteMessage, byteMessage.length, InetAddress.getByName(sequencerAddress), this.sequencerPort);
+            sequencerSocket.send(packet);
         }
     }
 
@@ -103,6 +115,12 @@ public class ReplicaImpl /*extends UnicastRemoteObject implements Replica*/ {
                             try {
                                 handleOrderMessage(message);
                             } catch (Exception e) {
+                                e.printStackTrace();
+                            }
+                        } else if(message.getType() == MessageType.KEEP_ALIVE) {
+                            try {
+                                handleKeepAliveMessage(message);
+                            } catch(Exception e) {
                                 e.printStackTrace();
                             }
                         }
@@ -140,13 +158,26 @@ public class ReplicaImpl /*extends UnicastRemoteObject implements Replica*/ {
         }
     }
 
+    private void handleKeepAliveMessage(Message message) throws IOException {
+        int order = message.getOrder();
+        System.out.println("[REPLICA " + name + "] received keep_alive " + Integer.toString(order));
+//        if(name.equals("1"))
+//            last--;
+        if(order > last) {
+            sendNACK();
+            return;
+        }
+    }
+
     public void save(Message message) {
         System.out.println("[REPLICA " + name + "] saving UUID: " + message.getMessageId().toString());
         storage.put(message.getId(), message.getValue());
         last = message.getOrder() + 1;
         if(lastMessage != null && message.getMessageId().equals(lastMessage.getMessageId())) {
             System.out.println("[REPLICA " + name + "] request completed UUID: " + message.getMessageId().toString());
-            timeout.cancel();
+            //while(!timeout.isShutdown())
+            timeout.shutdownNow();
+            isFirst = false;
             //timeout.purge();
             lastMessage = null;
         }

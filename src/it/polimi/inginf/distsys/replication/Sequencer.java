@@ -8,6 +8,9 @@ import java.net.MulticastSocket;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class Sequencer {
     private int multicastPort;
@@ -18,23 +21,41 @@ public class Sequencer {
     private int last;
     private Map<Integer, UUID> orderMap;
     private Map<UUID, Message> history;
+    private ScheduledExecutorService keepAlive;
 
-    public Sequencer() throws IOException {
+    public Sequencer() {
         this.history = new HashMap<UUID, Message>();
         this.orderMap = new HashMap<Integer, UUID>();
         this.last = 0;
-
         this.multicastPort = 5000;
         this.group = "225.4.5.6";
+        this.replicaPort = 5003;
+    }
+
+    public void start() throws IOException {
         this.multicastSocket = new MulticastSocket(multicastPort);
         multicastSocket.joinGroup(InetAddress.getByName(group));
 
-        this.replicaPort = 5003;
         this.replicaSocket = new DatagramSocket(replicaPort);
-
+        Runnable keepAliveTask = new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Message keepAliveMessage = new Message(MessageType.KEEP_ALIVE);
+                    keepAliveMessage.setOrder(last);
+                    System.out.println("[SEQUENCER] sending keep_alive " + Integer.toString(keepAliveMessage.getOrder()));
+                    byte[] byteMessage = messageToByte(keepAliveMessage);
+                    DatagramPacket packet = new DatagramPacket(byteMessage, byteMessage.length, InetAddress.getByName(group), multicastPort);
+                    multicastSocket.send(packet);
+                } catch(Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        };
+        keepAlive = Executors.newSingleThreadScheduledExecutor();
+        keepAlive.scheduleWithFixedDelay(keepAliveTask, 2, 2, TimeUnit.SECONDS);
         this.listen();
     }
-
     private void listen() {
         Runnable listenTask = new Runnable() {
             public void run() {
@@ -79,7 +100,7 @@ public class Sequencer {
         history.put(message.getMessageId(), orderMessage);
         orderMap.put(orderMessage.getOrder(), message.getMessageId());
         byte[] byteMessage = messageToByte(orderMessage);
-//        if (last != 10) {
+//        if (last < 10 || alreadySent) {
             DatagramPacket packet = new DatagramPacket(byteMessage, byteMessage.length, InetAddress.getByName(group), multicastPort);
             System.out.println("[SEQUENCER] sending order: " + Integer.toString(orderMessage.getOrder()) + " for message UUID: " + orderMessage.getMessageId().toString());
             multicastSocket.send(packet);
